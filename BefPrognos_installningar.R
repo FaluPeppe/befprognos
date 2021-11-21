@@ -7,9 +7,9 @@ options(dplyr.summarise.inform = FALSE)
 
 # ================================ Här gör vi inställningar för körningen ========================================
 aktlan <- "20"    #c("17", "20", "21")    # Välj län att göra prognoser på
-bara_lan <- TRUE                         # TRUE om bara län ska visas, FALSE för att visa länets kommuner
+bara_lan <- FALSE                         # TRUE om bara län ska visas, FALSE för att visa länets kommuner
 AktuellRegion <- NULL                     # Till diagramrubriken - NULL om namnet ska hämtas automatiskt 
-jmfrtid <- 10                             # antal år i jämförelsen, alltså hur många års sikt vi vill titta på
+jmfrtid <- 5                             # antal år i jämförelsen, alltså hur många års sikt vi vill titta på
 JmfrFleraPrognoser <- FALSE               # TRUE om vi vill jämföra med äldre prognoser, FALSE om vi bara vill se den senaste prognosen
 
 output_fold <- "G:/Samhällsanalys/API/Fran_R/Utskrift/"     # mapp på datorn som diagrammet skrivs till

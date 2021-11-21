@@ -7,6 +7,7 @@ library(ggplot2)
 library(png)
 library(tidyr)            # för att använda pivot_longer
 
+# en testrad för att testa github i R Studio
 # Ladda skript som sköter regionuttaget och kommuner per region
 source("G:/Samhällsanalys/Automatisering och R/Skript/API_func.R", encoding = "utf-8", echo = FALSE)
 source("G:/Samhällsanalys/Automatisering och R/Skript/func_logga_i_diagram.R", encoding = "utf-8", echo = FALSE)
