@@ -9,24 +9,32 @@ library(tidyr)            # för att använda pivot_longer
 
 # en testrad för att testa github i R Studio
 # Ladda skript som sköter regionuttaget och kommuner per region
-source("G:/Samhällsanalys/Automatisering och R/Skript/API_func.R", encoding = "utf-8", echo = FALSE)
-source("G:/Samhällsanalys/Automatisering och R/Skript/func_logga_i_diagram.R", encoding = "utf-8", echo = FALSE)
+source("G:/skript/func/func_API.R", encoding = "utf-8", echo = FALSE)
+source("G:/skript/func/func_logga_i_diagram.R", encoding = "utf-8", echo = FALSE)
+source("G:/skript/func/func_SkapaDiagram.R", encoding = "utf-8", echo = FALSE)
 
 # För att komma förbi brandvägg - om man har en sådan, annars kan man ta bort dessa två rader
-set_config(use_proxy(url = "http://mwg.ltdalarna.se", port = 9090, username = Sys.getenv("userid"), password = Sys.getenv("pwd")))
+set_config(use_proxy(url = "http://mwg.ltdalarna.se", port = 9090))
 set_config(config(ssl_verifypeer = 0L))
 
 SkapaBefPrognosDiagram <- function(aktlan = "20", bara_lan = TRUE, AktuellRegion = NULL,
                                    jmfrtid = 10, JmfrFleraPrognoser = FALSE,
                                    url_tabeller,
                                    output_fold,
+                                   gruppera_ihop = FALSE,
                                    logga_path,
                                    logga_storlek,
+                                   facet_scale = "free",
+                                   ta_med_logga = TRUE,
+                                   utan_diagramtitel = FALSE,
+                                   anvand_senaste_befar = FALSE,
+                                   dataetiketter = TRUE,
                                    diagram_capt = "") {
                                   
   # Initierar variabler
   malar <- 0
   startar <- 0
+  prognos_ar <- 0
   px_alla <- NULL
   
   # ================================================================================================================
@@ -51,6 +59,8 @@ SkapaBefPrognosDiagram <- function(aktlan = "20", bara_lan = TRUE, AktuellRegion
   
   # =============== jämförelse x år framåt från senaste tillgängliga år ==========================
   
+  senaste_ar_bef <- as.numeric(hamta_senaste_tid_i_tabell("http://api.scb.se/OV0104/v1/doris/sv/ssd/BE/BE0101/BE0101A/BefolkningNy", "år"))
+  
   # ========== Hämta befolkningsprognos för tabell(er) i vektor url_tabeller  ====================
   # om vi valt att jämföra flera prognoser loopas hela vektorn med url:er till tabellerna
   # annars kör vi bara första tabellen
@@ -61,7 +71,9 @@ SkapaBefPrognosDiagram <- function(aktlan = "20", bara_lan = TRUE, AktuellRegion
     px_small <- pxweb_get(url = url_tabeller[url_progn],query = list(
                             Region = "20",ContentsCode = "*", Tid = "*")) 
     px_df_small <- as.data.frame(px_small, column.name.type = "text", variable.value.type = "text")
-    startar[url_progn] <- as.character(as.numeric(min(px_df_small$år)) - 1)     # startår är alltid ett år innan första året i prognosen
+    
+    prognos_ar[url_progn] <- as.character(as.numeric(min(px_df_small$år)))
+    startar[url_progn] <- as.character(ifelse(anvand_senaste_befar, senaste_ar_bef - url_progn + 1, as.numeric(min(px_df_small$år)) - 1))     # startår är alltid ett år innan första året i prognosen
     malar[url_progn] <- as.character(as.numeric(startar[url_progn]) + jmfrtid)             # målår skapas genom att addera jämförelsetid till startåret
   
   
@@ -79,6 +91,7 @@ SkapaBefPrognosDiagram <- function(aktlan = "20", bara_lan = TRUE, AktuellRegion
       cbind(regionkod = as.data.frame(px_uttag, column.name.type = "code", variable.value.type = "code") %>% 
               select(Region)) %>% rename(regionkod = Region) %>% relocate(regionkod, .before = region)
     px_df <- px_df %>% select(regionkod, region, ålder, år, Folkmängd)
+    px_df$prognos_ar <- prognos_ar[url_progn]
     
     # bind ihop med tidigare
     px_alla <- rbind(px_df, px_alla)
@@ -103,6 +116,8 @@ SkapaBefPrognosDiagram <- function(aktlan = "20", bara_lan = TRUE, AktuellRegion
     cbind(regionkod = as.data.frame(px_uttag_bef, column.name.type = "code", variable.value.type = "code") %>% 
             select(Region)) %>% rename(regionkod = Region) %>% relocate(regionkod, .before = region)
   # skapa en df med både prognosvärden och befolkningssiffror för senaste året innan prognosen startar
+  px_df_bef$prognos_ar <- NA
+  
   progn_bef <- rbind(px_df_bef, px_alla)
   
   # Skapa en numerisk åldersvariabel 
@@ -115,16 +130,22 @@ SkapaBefPrognosDiagram <- function(aktlan = "20", bara_lan = TRUE, AktuellRegion
   progn_bef$aldergrp <- ifelse(progn_bef$åldernum > 79, "80+ år", progn_bef$aldergrp)
   progn_bef$aldergrp <- ifelse(progn_bef$ålder == "totalt ålder", "totalt", progn_bef$aldergrp)
   
+  # om vi vill gruppera ihop regionerna till en så gör vi det här (dvs. om gruppera_ihop = TRUE)
+  if (gruppera_ihop) progn_bef <- progn_bef %>% 
+    group_by(across(c(-region, - regionkod, -Folkmängd))) %>% 
+    summarise(Folkmängd = sum(Folkmängd)) %>% 
+    mutate(regionkod = "99", region = AktuellRegion)
+    
   # Skapa df för startår 
   dfstartar <- progn_bef %>%
     filter(år %in% startar) %>% 
-    group_by(år, regionkod, region, aldergrp) %>% 
+    group_by(år, prognos_ar, regionkod, region, aldergrp) %>% 
     summarize(antal = sum(Folkmängd))
   
   # Skapa df för målår
   dfmalar <- progn_bef %>% 
     filter(år %in% malar) %>% 
-    group_by(år, regionkod, region, aldergrp) %>% 
+    group_by(år, prognos_ar, regionkod, region, aldergrp) %>% 
     summarize(antal = sum(Folkmängd))
   
   # Här skapar vi en rad med total folkmängd i dfmalar ==========================================
@@ -132,6 +153,7 @@ SkapaBefPrognosDiagram <- function(aktlan = "20", bara_lan = TRUE, AktuellRegion
     group_by(år, region) %>% 
     summarize(regionkod = first(regionkod),
               region = first(region),
+              prognos_ar = first(prognos_ar),
               antal = sum(antal))
   # Lägg på total_df som rad på dfmalar
   dfmalar <- rbind(dfmalar, total_df) %>% 
@@ -146,7 +168,7 @@ SkapaBefPrognosDiagram <- function(aktlan = "20", bara_lan = TRUE, AktuellRegion
   # ====================================== Skapa diff-df ==================================================
   dfdiff <- dfmalar
   dfdiff$år <- paste0("Förändring ", dfstartar$år,"-", dfmalar$år, " (prognos våren ", 
-                      as.numeric(dfstartar$år) +1, ")")
+                      as.numeric(dfmalar$prognos_ar), ")")
   dfdiff$antal <- dfmalar$antal - dfstartar$antal
   
   # Gör om aldergrp till factor som vi lägger i den ordning vi vill 
@@ -164,7 +186,7 @@ SkapaBefPrognosDiagram <- function(aktlan = "20", bara_lan = TRUE, AktuellRegion
   if(JmfrFleraPrognoser == FALSE) {
     diagramtitel <- paste0("Befolkningsförändring i ", AktuellRegion, " ",
                            dfstartar$år[1],"-", dfmalar$år[1], "\n(enligt befolkningsprognos våren ", 
-                           as.numeric(dfstartar$år[1]) +1, ")")
+                           prognos_ar[1], ")")
   } else {
     diagramtitel <- paste0("Befolkningsförändring i ", AktuellRegion, " på ", jmfrtid, 
                            " års sikt")
@@ -178,68 +200,100 @@ SkapaBefPrognosDiagram <- function(aktlan = "20", bara_lan = TRUE, AktuellRegion
                       rgb(79,98,40, maxColorValue = 255))  
   }
   
-  # Här skapar vi själva diagrammet i ggplot
-  p<-dfdiff %>% 
-    ggplot(aes(x=aldergrp, y=antal, fill=år)) +
-    geom_bar(position = "dodge", stat="identity")+
-    #theme_minimal() + 
-    {if(length(unique(dfdiff$region)) == 1){
-      geom_text(aes(y=antal+sign(antal),label=antal,
-                    vjust = ifelse(antal >= 0, -0.5, 1)),
-                color = "#464d48", 
-                size=2.3, 
-                position = position_dodge(width = 0.9))
-    }} +
-    theme(axis.text.x = element_text(size = 8),
-          legend.position = "bottom",
-          legend.title = element_blank(),
-          axis.ticks = element_blank(), 
-          plot.title = element_text(hjust = 0.5),
-          plot.caption = element_text(face = "italic", size = 5,
-                                      hjust = 0, vjust = 0),
-          plot.caption.position = "plot",
-          panel.grid.major = element_line(size=0.5, colour = "lightgrey"),
-          panel.grid.minor = element_line(size=0.08, colour = "lightgrey"),
-          panel.background = element_rect(fill = "white")) +
-    {if(JmfrFleraPrognoser == FALSE) theme(legend.position = "none")}+    # om man inte jämför flera prognoser, ta bort legend
-    scale_fill_manual(values=stapelfarger) +
-    labs(title = diagramtitel, 
-         x = element_blank(),
-         y = element_blank(),
-         caption = diagram_capt) +
-    facet_wrap(~ region, scales = "free") +
-    if(length(unique(dfdiff$region)) == 1){
-      theme(strip.text = element_blank())
-    } else {  
-      theme(strip.text = element_text(color = "black"),
-            strip.background = element_blank())
-    }
-
-  # Ändra höjd och bredd på den sparade png-filen utifrån hur många regioner
-  # som är med i diagrammet, + ange mapp och filnamn
-  bredd <- ifelse(length(unique(dfdiff$region)) == 1, 7, 13)
-  hojd <- ifelse(length(unique(dfdiff$region)) == 1, 4, 8)
-  # och om det är fler än 20 kommuner
-  bredd <- ifelse(length(unique(dfdiff$region)) > 20 , 19, bredd)
-  hojd <- ifelse(length(unique(dfdiff$region)) > 20, 12, hojd)
-  fold <- output_fold
-  jmfr_pre <- ifelse(JmfrFleraPrognoser == TRUE, "_jmfr", "")   # lägger till ett "_jmfr" efter namnet om flera prognoser jämförs så att man kan skilja dessa prognoser från de med en prognos i filnamnet
-  filnamn_pre <- paste0("Befolkningsförändring i ", AktuellRegion, " på ", jmfrtid, " års sikt", jmfr_pre)
-  filnamn <- paste0(filnamn_pre, ".png")
-  ggsave(paste0(fold,filnamn), width = bredd, height = hojd)
+  # gör grupper
+  if (gruppera_ihop | length(unique(dfdiff$region)) == 1) facet_installning <- FALSE else facet_installning <- TRUE
   
-  # Lägg till logga till diagrammet =======================================
-  if (!is.null(logga_path)){ 
-    add_logo(
-    plot_path = paste0(fold, filnamn), # url or local file for the plot
-    logo_path = logga_path, # url or local file for the logo
-    logo_position = "bottom right", # choose a corner
-    # 'top left', 'top right', 'bottom left' or 'bottom right'
-    logo_scale = logga_storlek,
-    #10 as default, but can change to manually make logo bigger (lägre tal = större logga)
-    replace = TRUE
-  )
-  }
+  jmfr_pre <- ifelse(JmfrFleraPrognoser == TRUE, "_jmfr", "")   # lägger till ett "_jmfr" efter namnet om flera prognoser jämförs så att man kan skilja dessa prognoser från de med en prognos i filnamnet
+  grp_pre <- ifelse(gruppera_ihop, "_grp", "_perRegion")
+  filnamn_pre <- paste0("Befolkningsförändring i ", AktuellRegion, " på ", jmfrtid, " års sikt", jmfr_pre, grp_pre)
+  filnamn <- paste0(filnamn_pre, ".png")
+
+ SkapaStapelDiagram(skickad_df = dfdiff,
+                    skickad_x_var = "aldergrp",
+                    skickad_y_var = "antal",
+                    skickad_x_grupp = ifelse(length(unique(dfdiff$år)) > 1, "år", NA),
+                    diagram_titel = diagramtitel,
+                    output_mapp = output_fold,
+                    diagram_capt = diagram_capt,
+                    diagram_facet = facet_installning,
+                    facet_grp = "region",
+                    facet_scale = facet_scale,
+                    facet_legend_bottom = facet_installning,
+                    manual_color = stapelfarger,
+                    #legend_titel = "test",
+                    manual_y_axis_title = "förändring antal invånare",
+                    x_axis_lutning = 0,
+                    manual_x_axis_text_vjust = 1,
+                    manual_x_axis_text_hjust = 1,
+                    utan_diagramtitel = utan_diagramtitel,
+                    lagg_pa_logga = ta_med_logga,
+                    dataetiketter = dataetiketter,
+                    filnamn_diagram = filnamn)
+ 
+  
+  # ================= gammal kod för att skapa diagram, ersatt med funktionen SkapaStapelDiagram =======================
+  # # Här skapar vi själva diagrammet i ggplot
+  # p<-dfdiff %>% 
+  #   ggplot(aes(x=aldergrp, y=antal, fill=år)) +
+  #   geom_bar(position = "dodge", stat="identity")+
+  #   #theme_minimal() + 
+  #   {if(length(unique(dfdiff$region)) == 1){
+  #     geom_text(aes(y=antal+sign(antal),label=antal,
+  #                   vjust = ifelse(antal >= 0, -0.5, 1)),
+  #               color = "#464d48", 
+  #               size=2.3, 
+  #               position = position_dodge(width = 0.9))
+  #   }} +
+  #   theme(axis.text.x = element_text(size = 8),
+  #         legend.position = "bottom",
+  #         legend.title = element_blank(),
+  #         axis.ticks = element_blank(), 
+  #         plot.title = element_text(hjust = 0.5),
+  #         plot.caption = element_text(face = "italic", size = 5,
+  #                                     hjust = 0, vjust = 0),
+  #         plot.caption.position = "plot",
+  #         panel.grid.major = element_line(size=0.5, colour = "lightgrey"),
+  #         panel.grid.minor = element_line(size=0.08, colour = "lightgrey"),
+  #         panel.background = element_rect(fill = "white")) +
+  #   {if(JmfrFleraPrognoser == FALSE) theme(legend.position = "none")}+    # om man inte jämför flera prognoser, ta bort legend
+  #   scale_fill_manual(values=stapelfarger) +
+  #   labs(title = diagramtitel, 
+  #        x = element_blank(),
+  #        y = element_blank(),
+  #        caption = diagram_capt) +
+  #   facet_wrap(~ region, scales = facet_scale) +
+  #   if(length(unique(dfdiff$region)) == 1){
+  #     theme(strip.text = element_blank())
+  #   } else {  
+  #     theme(strip.text = element_text(color = "black"),
+  #           strip.background = element_blank())
+  #   }
+  # 
+  # # Ändra höjd och bredd på den sparade png-filen utifrån hur många regioner
+  # # som är med i diagrammet, + ange mapp och filnamn
+  # bredd <- ifelse(length(unique(dfdiff$region)) == 1, 7, 13)
+  # hojd <- ifelse(length(unique(dfdiff$region)) == 1, 4, 8)
+  # # och om det är fler än 20 kommuner
+  # bredd <- ifelse(length(unique(dfdiff$region)) > 20 , 19, bredd)
+  # hojd <- ifelse(length(unique(dfdiff$region)) > 20, 12, hojd)
+  # fold <- output_fold
+  # jmfr_pre <- ifelse(JmfrFleraPrognoser == TRUE, "_jmfr", "")   # lägger till ett "_jmfr" efter namnet om flera prognoser jämförs så att man kan skilja dessa prognoser från de med en prognos i filnamnet
+  # filnamn_pre <- paste0("Befolkningsförändring i ", AktuellRegion, " på ", jmfrtid, " års sikt", jmfr_pre)
+  # filnamn <- paste0(filnamn_pre, ".png")
+  # ggsave(paste0(fold,filnamn), width = bredd, height = hojd)
+  # 
+  # # Lägg till logga till diagrammet =======================================
+  # if (!is.null(logga_path)){ 
+  #   add_logo(
+  #   plot_path = paste0(fold, filnamn), # url or local file for the plot
+  #   logo_path = logga_path, # url or local file for the logo
+  #   logo_position = "bottom right", # choose a corner
+  #   # 'top left', 'top right', 'bottom left' or 'bottom right'
+  #   logo_scale = logga_storlek,
+  #   #10 as default, but can change to manually make logo bigger (lägre tal = större logga)
+  #   replace = TRUE
+  # )
+  # }
 # slut på funktionen
 }
 
